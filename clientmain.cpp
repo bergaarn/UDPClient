@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <calcLib.h>
+#include <sys/time.h>
 
 // Header files
 #include "protocol.h"
@@ -86,10 +87,10 @@ int main(int argc, char *argv[]){
   struct sockaddr_in hostAdress;
   socklen_t len = sizeof hostAdress;
   
-  memset(&hostAdress, 0, sizeof(hostAdress));
+  memset(&hostAdress, 0, len);
   getsockname(socketFD, (struct sockaddr*)&hostAdress, &len);
   inet_ntop(AF_INET, &hostAdress, hostIP, sizeof(hostIP));
-  printf("Host Address: %s:%d\n", hostIP, hostAdress.sin_port);
+  printf("Host Address: %s:%d\n", hostIP, atoi(serverPort));
 
   char localIP[INET_ADDRSTRLEN];
   struct sockaddr_in localAdress;
@@ -101,8 +102,10 @@ int main(int argc, char *argv[]){
   int localPort = ntohs(localAdress.sin_port);
   close(socketFDtemp);
 
+  #ifdef DEBUG
   printf("Local IP address: %s:%d\n", localIP, localPort);
-  
+  #endif
+
   //----------------------------------------------------------
 
   /*
@@ -111,8 +114,6 @@ int main(int argc, char *argv[]){
 
   //----------------------------------------------------------
 
-
-  // SendTo()
   int32_t sentBytes;
   int32_t recvBytes;
   struct calcMessage mBuffer;
@@ -130,17 +131,21 @@ int main(int argc, char *argv[]){
     fprintf(stderr, "Unable to send.\n");
     exit(1);
   }
+
+  #ifdef DEBUG
   printf("Sent %d bytes.\n", sentBytes);
+  #endif
 
-
-  // Recvfrom()
   recvBytes = recvfrom(socketFD, &pBuffer, sizeof(pBuffer), 0, pointer->ai_addr, &pointer->ai_addrlen);
   if(recvBytes == -1)
   {
     fprintf(stderr, "Unable to recieve\n");
     exit (1);
   }
+  
+  #ifdef DEBUG
   printf("Recieved %d bytes\n", recvBytes);
+  #endif
 
   uint16_t pType = ntohs(pBuffer.type);
   uint16_t pMajor = ntohs(pBuffer.major_version);
@@ -154,9 +159,118 @@ int main(int argc, char *argv[]){
   double secondFloatValue = pBuffer.flValue2;
   double floatResult = pBuffer.flResult;
 
+
+  #ifdef DEBUG
   printf("Type: %d, Major: %d, Minor: %d, ID: %d, Arith: %d\n", pType, pMajor, pMinor, pID, pArith);
   printf("First Int: %d, Second Int: %d\n",  firstIntValue, secondIntValue);
   printf("First Float: %8.8g, Second Float: %8.8g\n", firstFloatValue, secondFloatValue);
+  #endif
+ 
+  switch (pArith)
+  {
+  case 1:
+  intResult = firstIntValue + secondIntValue;
+  printf("Solve: %d + %d\n",  firstIntValue, secondIntValue);
+  printf("Result: %d\n", intResult);  
+  break;
+
+  case 2:
+  intResult = firstIntValue - secondIntValue;
+  printf("Solve: %d - %d\n",  firstIntValue, secondIntValue);  
+  printf("Result: %d\n", intResult);
+  break;
+  
+  case 3:
+  intResult = firstIntValue * secondIntValue;
+  printf("Solve: %d * %d\n",  firstIntValue, secondIntValue);  
+  printf("Result: %d\n", intResult);
+  break;
+  
+  case 4:
+  intResult = firstIntValue / secondIntValue;
+  printf("Solve: %d / %d\n",  firstIntValue, secondIntValue);  
+  printf("Result: %d\n", intResult);
+  break;
+  
+  case 5:
+  floatResult = firstFloatValue + secondFloatValue;
+  printf("Solve: %8.8g + %8.8g\n", firstFloatValue, secondFloatValue);
+  printf("Result: %8.8g\n", floatResult);
+  break;
+  
+  case 6:
+  floatResult = firstFloatValue - secondFloatValue;
+  printf("Solve: %8.8g - %8.8g\n", firstFloatValue, secondFloatValue);
+  printf("Result: %8.8g\n", floatResult);
+  break;
+  
+  case 7:
+  floatResult = firstFloatValue * secondFloatValue;
+  printf("Solve: %8.8g * %8.8g\n", firstFloatValue, secondFloatValue);
+  printf("Result: %8.8g\n", floatResult);
+  break;
+  
+  case 8:
+  floatResult = firstFloatValue / secondFloatValue;
+  printf("Solve: %8.8g / %8.8g\n", firstFloatValue, secondFloatValue);
+  printf("Result: %8.8g\n", floatResult);
+  break;
+
+  default:
+  fprintf(stderr, "Progam stopped at arith.\n");
+  break;
+  }
+  
+  if(pArith < 5)
+  {
+    pBuffer.inResult = htonl(intResult);
+  }
+  else 
+  {
+    pBuffer.flResult = floatResult;
+  }
+
+  pBuffer.type = htons(2);
+  pBuffer.major_version = htons(1);
+  pBuffer.minor_version = htons(0);
+  pBuffer.id = htonl(pID);
+
+  sentBytes = sendto(socketFD, &pBuffer, sizeof(pBuffer), 0, pointer->ai_addr, pointer->ai_addrlen);
+  if(sentBytes == -1)
+  {
+    fprintf(stderr, "Program stopped at send sendcalc.\n");
+    exit(1);
+  }
+
+  recvBytes = recvfrom(socketFD, &mBuffer, sizeof(mBuffer), 0, pointer->ai_addr, &pointer->ai_addrlen);
+  if(recvBytes == -1)
+  {
+    fprintf(stderr, "Program stopped at recvcalc.\n");
+    exit(1);
+  }
+
+  #ifdef DEBUG
+  printf("Recieved %d bytes.\n", recvBytes);
+  #endif
+  
+  if(ntohl(mBuffer.message) == 1)
+  {
+    printf("OK\n");
+    
+  }
+
+  else if(ntohl(mBuffer.message == 0))
+  {
+    fprintf(stderr, "Server responded with Not applicable/available\n");
+    exit(1);
+  }
+
+  else
+  {
+   fprintf(stderr, "NOT OK.\n");
+   exit(1);
+  }
+
   freeaddrinfo(server);  
   close(socketFD);
 
