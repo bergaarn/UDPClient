@@ -10,13 +10,13 @@
 #include <unistd.h>
 #include <calcLib.h>
 #include <sys/time.h>
+#include <signal.h>
 
 // Header files
 #include "protocol.h"
 
 // Defines
-#define DEBUG
-#define BUFFERSIZE 100
+//#define DEBUG
 
 int main(int argc, char *argv[]){
  
@@ -29,6 +29,7 @@ int main(int argc, char *argv[]){
   struct addrinfo* server;
   struct addrinfo* pointer;
 
+  // Call Verifications  
   if(argc != 2)
   {
     fprintf(stderr, "Program call was incorrect.\n");
@@ -41,6 +42,7 @@ int main(int argc, char *argv[]){
     exit(1);
   }
 
+  // Extract IP Address and port from call
   serverIP = strtok(argv[1], delim);
   serverPort = strtok(NULL, delim);
 
@@ -50,10 +52,12 @@ int main(int argc, char *argv[]){
     exit(1); 
   }
 
+  // Prepare addrinfo 
   memset(&prep, 0, sizeof prep);
   prep.ai_family = AF_UNSPEC;
   prep.ai_socktype = SOCK_DGRAM;
 
+  // Fill server with information
   errorIndex = getaddrinfo(serverIP, serverPort, &prep, &server);
   if(errorIndex != 0)
   {
@@ -61,8 +65,11 @@ int main(int argc, char *argv[]){
     return 1;
   }
 
+  // Traverse the linked list of addrinfo's
   for(pointer = server; pointer != NULL; pointer = pointer->ai_next)
   {
+
+    // Attempt to create socket, if failed, try the next one
     socketFD = socket(pointer->ai_family, pointer->ai_socktype, pointer->ai_protocol);
     if(socketFD == -1)
     {
@@ -71,6 +78,7 @@ int main(int argc, char *argv[]){
     break;
   }
 
+  // Create a second socket to connect to the server
   int socketFDtemp = socket(pointer->ai_family, pointer->ai_socktype, pointer->ai_protocol);
   errorIndex = connect(socketFDtemp, pointer->ai_addr, pointer->ai_addrlen);
   if(errorIndex == -1)
@@ -79,41 +87,64 @@ int main(int argc, char *argv[]){
     return 2;
   }
 
-  /*
-   IPV4 Adresser
-  */
+  // Create string buffer big enough for IPV4 and IPV6
+  char hostIP[INET6_ADDRSTRLEN];
 
-  char hostIP[INET_ADDRSTRLEN];
-  struct sockaddr_in hostAdress;
-  socklen_t len = sizeof hostAdress;
-  
-  memset(&hostAdress, 0, len);
-  getsockname(socketFD, (struct sockaddr*)&hostAdress, &len);
-  inet_ntop(AF_INET, &hostAdress, hostIP, sizeof(hostIP));
-  printf("Host Address: %s:%d\n", hostIP, atoi(serverPort));
+  if(pointer->ai_family == AF_INET)
+  {
 
-  char localIP[INET_ADDRSTRLEN];
-  struct sockaddr_in localAdress;
-  len = sizeof localAdress;
+    // Get Host Address
+    struct sockaddr_in hostAddress;
+    socklen_t len = sizeof hostAddress;
+    memset(&hostAddress, 0, len);
+    getsockname(socketFD, (struct sockaddr*)&hostAddress, &len);
+    inet_ntop(AF_INET, &hostAddress.sin_addr, hostIP, len);
+    printf("Host Address: %s:%d\n", hostIP, atoi(serverPort));
+
+    //Get Local Address
+    char localIP[INET_ADDRSTRLEN];
+    struct sockaddr_in localAddress;
+    len = sizeof localAddress;
+    memset(&localAddress, 0, len);
+    getsockname(socketFDtemp, (struct sockaddr*)&localAddress, &len);
+    inet_ntop(AF_INET, &localAddress.sin_addr, localIP, sizeof(localIP));
+    
+    #ifdef DEBUG
+    printf("Connected to: %s:%d | Local Address: %s:%d\n",serverIP, atoi(serverPort), localIP, ntohs(localAddress.sin_port));
+    #endif
+  }
+  else if(pointer->ai_family == AF_INET6)
+  {
+
+    // Get Host Address IPV6
+    struct sockaddr_in6 hostAddress6;
+    socklen_t len = sizeof hostAddress6;
+    memset(&hostAddress6, 0, len);
+    getsockname(socketFD, (struct sockaddr*)&hostAddress6, &len);
+    inet_ntop(AF_INET6, &hostAddress6.sin6_addr, hostIP, len);
+    printf("Host Address: %s:%d\n", hostIP, atoi(serverPort));
+
+
+    // Get Local Address IPV6
+    char localIP6[INET6_ADDRSTRLEN];
+    struct sockaddr_in6 localAddress6;
+    len = sizeof localAddress6;
+    memset(&localAddress6, 0, len);
+    getsockname(socketFDtemp, (struct sockaddr*)&localAddress6, &len);
+    inet_ntop(AF_INET6, &localAddress6.sin6_addr, localIP6, sizeof(localIP6));
+
+    #ifdef DEBUG
+    printf("Local Address: %s:%d\n", localIP6, ntohs(localAddress6.sin6_port));
+    #endif
+  }
+  else
+  {
+    fprintf(stderr, "IP Version could not be identified\n");
+  }
   
-  memset(&localAdress, 0, sizeof(localAdress));
-  getsockname(socketFDtemp, (struct sockaddr*)&localAdress, &len);
-  inet_ntop(AF_INET, &localAdress, localIP, sizeof(localIP));
-  int localPort = ntohs(localAdress.sin_port);
   close(socketFDtemp);
 
-  #ifdef DEBUG
-  printf("Local IP address: %s:%d\n", localIP, localPort);
-  #endif
-
-  //----------------------------------------------------------
-
-  /*
-    Hantera IPV6 Adresser
-  */
-
-  //----------------------------------------------------------
-
+  // Now We can send and recv from the server
   int32_t sentBytes;
   int32_t recvBytes;
   struct calcMessage mBuffer;
@@ -125,6 +156,7 @@ int main(int argc, char *argv[]){
   mBuffer.major_version = htons(1);
   mBuffer.minor_version = htons(0);
 
+  // First Message to server
   sentBytes = sendto(socketFD, &mBuffer, sizeof(mBuffer), 0, pointer->ai_addr, pointer->ai_addrlen);
   if(sentBytes == -1)
   {
@@ -241,7 +273,7 @@ int main(int argc, char *argv[]){
     fprintf(stderr, "Program stopped at send sendcalc.\n");
     exit(1);
   }
-
+  
   recvBytes = recvfrom(socketFD, &mBuffer, sizeof(mBuffer), 0, pointer->ai_addr, &pointer->ai_addrlen);
   if(recvBytes == -1)
   {
