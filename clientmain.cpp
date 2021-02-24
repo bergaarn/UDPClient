@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <calcLib.h>
 #include <sys/time.h>
-#include <signal.h>
+#include <errno.h>
 
 // Header files
 #include "protocol.h"
@@ -33,13 +33,13 @@ int main(int argc, char *argv[]){
   if(argc != 2)
   {
     fprintf(stderr, "Program call was incorrect.\n");
-    exit(1);
+    return 1;
   }
 
   if(strlen(argv[1]) < 13)
   {
     fprintf(stderr, "No port found.\n");
-    exit(1);
+    return 2;
   }
 
   // Extract IP Address and port from call
@@ -49,7 +49,7 @@ int main(int argc, char *argv[]){
   if(serverIP == NULL || serverPort == NULL)
   {
     fprintf(stderr, "Invalid server input.\n");
-    exit(1); 
+    return 3; 
   }
 
   // Prepare addrinfo 
@@ -62,7 +62,7 @@ int main(int argc, char *argv[]){
   if(errorIndex != 0)
   {
     fprintf(stderr, "Program stopped at getaddrinfo: %s\n", gai_strerror(errorIndex));
-    return 1;
+    return 4;
   }
 
   // Traverse the linked list of addrinfo's
@@ -84,9 +84,9 @@ int main(int argc, char *argv[]){
   if(errorIndex == -1)
   {
     fprintf(stderr, "Unable to connect to server.\n");
-    return 2;
+    return 5;
   }
-
+  
   // Create string buffer big enough for IPV4 and IPV6
   char hostIP[INET6_ADDRSTRLEN];
 
@@ -141,7 +141,8 @@ int main(int argc, char *argv[]){
   {
     fprintf(stderr, "IP Version could not be identified\n");
   }
-  
+
+  freeaddrinfo(server);  
   close(socketFDtemp);
 
   // Now We can send and recv from the server
@@ -156,24 +157,61 @@ int main(int argc, char *argv[]){
   mBuffer.major_version = htons(1);
   mBuffer.minor_version = htons(0);
 
-  // First Message to server
-  sentBytes = sendto(socketFD, &mBuffer, sizeof(mBuffer), 0, pointer->ai_addr, pointer->ai_addrlen);
-  if(sentBytes == -1)
+
+
+  struct timeval timeout;
+  timeout.tv_sec = 2;
+  timeout.tv_usec = 0;
+
+  size_t sockLen;
+  socklen_t i = sizeof(sockLen);
+  if(setsockopt(socketFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0)
   {
-    fprintf(stderr, "Unable to send.\n");
-    exit(1);
+    fprintf(stderr, "Error at sockopt.\n");
+    return 6;
   }
 
-  #ifdef DEBUG
-  printf("Sent %d bytes.\n", sentBytes);
-  #endif
+    // First Message to server
+    int attemptsLeft = 3;
+    while(attemptsLeft > 0)
+    {
 
-  recvBytes = recvfrom(socketFD, &pBuffer, sizeof(pBuffer), 0, pointer->ai_addr, &pointer->ai_addrlen);
-  if(recvBytes == -1)
-  {
-    fprintf(stderr, "Unable to recieve\n");
-    exit (1);
-  }
+      sentBytes = sendto(socketFD, &mBuffer, sizeof(mBuffer), 0, pointer->ai_addr, pointer->ai_addrlen);
+      if(sentBytes == -1)
+      {
+        fprintf(stderr, "Unable to send.\n");
+        return 7;
+      }
+
+      #ifdef DEBUG
+      printf("Sent %d bytes.\n", sentBytes);
+      #endif
+
+      recvBytes = recvfrom(socketFD, &pBuffer, sizeof(pBuffer), 0, pointer->ai_addr, &pointer->ai_addrlen);
+      if(recvBytes == -1)
+      {
+        printf("Attempts: %d\n", attemptsLeft);
+        attemptsLeft--;
+        continue;
+      }
+      else if(recvBytes == sizeof (struct calcMessage))
+      {
+        fprintf(stderr, "Server responded with calcMessage\n");
+        struct calcMessage* temp = (struct calcMessage*)&pBuffer;
+        if(temp->message == 2)
+        {
+          return 9;
+        }
+      }
+      else if(recvBytes == sizeof (struct calcProtocol))
+      {
+        break;
+      }
+
+    }
+    
+    
+
   
   #ifdef DEBUG
   printf("Recieved %d bytes\n", recvBytes);
@@ -267,20 +305,38 @@ int main(int argc, char *argv[]){
   pBuffer.minor_version = htons(0);
   pBuffer.id = htonl(pID);
 
-  sentBytes = sendto(socketFD, &pBuffer, sizeof(pBuffer), 0, pointer->ai_addr, pointer->ai_addrlen);
-  if(sentBytes == -1)
-  {
-    fprintf(stderr, "Program stopped at send sendcalc.\n");
-    exit(1);
-  }
-  
-  recvBytes = recvfrom(socketFD, &mBuffer, sizeof(mBuffer), 0, pointer->ai_addr, &pointer->ai_addrlen);
-  if(recvBytes == -1)
-  {
-    fprintf(stderr, "Program stopped at recvcalc.\n");
-    exit(1);
-  }
+  attemptsLeft = 3;
+  while(attemptsLeft > 0)
+  {  
+    sentBytes = sendto(socketFD, &pBuffer, sizeof(pBuffer), 0, pointer->ai_addr, pointer->ai_addrlen);
+    if(sentBytes == -1)
+    {
+      fprintf(stderr, "Program stopped at send sendcalc.\n");
+      return 10;
+    }
 
+    #ifdef DEBUG
+    printf("Sent %d bytes.\n", sentBytes);
+    #endif
+    
+    recvBytes = recvfrom(socketFD, &mBuffer, sizeof(mBuffer), 0, pointer->ai_addr, &pointer->ai_addrlen);
+    if(recvBytes == -1)
+    {
+      printf("Attempts: %d\n", attemptsLeft);
+      attemptsLeft--;
+      continue;
+    }
+    else if(recvBytes == sizeof (calcProtocol))
+    {
+      fprintf(stderr, "Server responded with calcProt, Terminate\n");
+      return 12;
+    }
+    else if (recvBytes == sizeof (calcMessage))
+    {
+      break;
+    }
+
+  }
   #ifdef DEBUG
   printf("Recieved %d bytes.\n", recvBytes);
   #endif
@@ -294,16 +350,22 @@ int main(int argc, char *argv[]){
   else if(ntohl(mBuffer.message == 0))
   {
     fprintf(stderr, "Server responded with Not applicable/available\n");
-    exit(1);
+    return 13;
   }
 
   else
   {
+    if(attemptsLeft == 0)
+    {
+      fprintf(stderr, "Attempts used. Terminate\n");
+      return 14;
+    }
+
    fprintf(stderr, "NOT OK.\n");
-   exit(1);
+   return 14;
   }
 
-  freeaddrinfo(server);  
+  
   close(socketFD);
 
   return 0;
